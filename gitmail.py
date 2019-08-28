@@ -2,6 +2,7 @@ import argparse
 import requests
 import subprocess
 import shutil
+import asyncio
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -18,26 +19,44 @@ def main():
         print('Done')
         return
 
-    emails = set()
+    all_emails = set()
     for t in args.targets:
-        curr = TMPFILE / t
-        curr.mkdir(parents=True, exist_ok=True)
+        print(f'Scanning {t}')
+        all_emails.update(asyncio.run(process_target(t)))
 
-        repos = get_repos(t)
-        for r in repos:
-            emails.update(scan_repo(r, curr))
+    if len(args.targets) > 1:
+        print(f'All emails')
+        print(max(map(len, all_emails), default=12) * '-')
+        print('\n'.join(sorted(all_emails)))
+        print()
+
+async def process_target(target):
+    emails = set()
+    curr = TMPFILE / target
+    curr.mkdir(parents=True, exist_ok=True)
+
+    repos = get_repos(target)
+    results = await asyncio.gather(*[scan_repo(r, curr) for r in repos])
+    for r in results:
+        emails.update(r)
 
     print()
-    print('FOUND EMAILS')
+    print(f'Emails for {target}')
     print(max(map(len, emails), default=12) * '-')
     print('\n'.join(sorted(emails)))
+    print()
 
-def scan_repo(repo, wd):
+    return emails
+
+
+async def scan_repo(repo, wd):
     git_dir = wd / f"{repo['name']}.git"
     if git_dir.exists():
         print(f"Repo '{repo['owner']['login']}/{repo['name']}' found in cache, cloning skipped")
     else:
-        subprocess.run(['git', 'clone', '--bare', repo['html_url']], cwd=wd)
+        print(f"Cloning '{repo['owner']['login']}/{repo['name']}'")
+        proc = await asyncio.create_subprocess_exec('git', 'clone', '--bare', repo['html_url'], cwd=wd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
     res = subprocess.run(['git', '--git-dir', str(git_dir), 'log', "--pretty=%ae", '--all'], capture_output=True, text=True)
     return set(res.stdout.split())
 
