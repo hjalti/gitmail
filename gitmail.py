@@ -1,3 +1,4 @@
+import os
 import argparse
 import requests
 import subprocess
@@ -8,14 +9,20 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument('targets', nargs='*')
 parser.add_argument('--clean', action='store_true', help='Clean cache')
+parser.add_argument('--cache-dir', default=Path('/tmp/gitmail'), help='Directory used for cache. Default: %(default)s', type=Path)
+parser.add_argument('--github-token', help='Github OAuth token used when making requests to github. Can also be set with the environment variable GITMAIL_TOKEN.')
+parser.add_argument('--include-forks', action='store_true', help='Also search forked repositories')
 args = parser.parse_args()
 
-TMPFILE = Path('/tmp/gitmail')
+def github_token():
+    if args.github_token:
+        return args.github_token
+    return os.environ.get('GITMAIL_TOKEN')
 
 def main():
     if args.clean:
         print('Deleting cached repositories')
-        shutil.rmtree(TMPFILE)
+        shutil.rmtree(args.cache_dir)
         print('Done')
         return
 
@@ -32,7 +39,7 @@ def main():
 
 async def process_target(target):
     emails = set()
-    curr = TMPFILE / target
+    curr =  args.cache_dir/ target
     curr.mkdir(parents=True, exist_ok=True)
 
     repos = get_repos(target)
@@ -61,8 +68,10 @@ async def scan_repo(repo, wd):
     return set(res.stdout.split())
 
 def get_repos(target):
-    repos = requests.get(f'https://api.github.com/users/{target}/repos?per_page=100&sort=pushed').json()
-    return [r for r in repos if not r['fork']]
+    token = github_token()
+    headers = token and {'Authorization': f'token {token}'} or {}
+    repos = requests.get(f'https://api.github.com/users/{target}/repos?per_page=100&sort=pushed', headers=headers).json()
+    return args.include_forks and repos or [r for r in repos if not r['fork']]
 
 if __name__ == '__main__':
     main()
